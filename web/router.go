@@ -3,7 +3,9 @@ package web
 import (
 	"log"
 	"net/http"
+	"path"
 
+	"github.com/gorilla/context"
 	"github.com/gorilla/mux"
 )
 
@@ -16,11 +18,61 @@ func (h netHTTPWrap) ServeHTTPC(c C, w http.ResponseWriter, r *http.Request) {
 }
 
 func New() *Router {
-	return &Router{mux.NewRouter()}
+	return &Router{Router: mux.NewRouter()}
 }
 
 type Router struct {
 	*mux.Router
+	appHandler func(interface{}, mux.RouteMatch) Handler
+}
+
+// ServeHTTP dispatches the handler registered in the matched route.
+//
+// When there is a match, the route variables can be retrieved calling
+// mux.Vars(request).
+//
+// taken from gorilla/mux's Router
+// NOTE: this probably breaks mux.CurrentRoute()
+func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+
+	// Clean path to canonical form and redirect.
+	if p := cleanPath(req.URL.Path); p != req.URL.Path {
+
+		// Added 3 lines (Philip Schlump) - It was droping the query string and #whatever from query.
+		// This matches with fix in go 1.2 r.c. 4 for same problem.  Go Issue:
+		// http://code.google.com/p/go/issues/detail?id=5252
+		url := *req.URL
+		url.Path = p
+		p = url.String()
+
+		w.Header().Set("Location", p)
+		w.WriteHeader(http.StatusMovedPermanently)
+		return
+	}
+	var match mux.RouteMatch
+	var handler http.Handler
+	if r.Match(req, &match) {
+		handler = match.Handler
+	}
+
+	if handler == nil {
+		handler = r.NotFoundHandler
+		if handler == nil {
+			handler = http.NotFoundHandler()
+		}
+	}
+	if !r.KeepContext {
+		defer context.Clear(req)
+	}
+
+	if r.appHandler != nil {
+		handler = r.appHandler(handler, match)
+	}
+	handler.ServeHTTP(w, req)
+}
+
+func (r *Router) SetAppHandler(app func(h interface{}, match mux.RouteMatch) Handler) {
+	r.appHandler = app
 }
 
 func (r *Router) NotFound(h interface{}) {
@@ -129,4 +181,22 @@ func (r *Router) Options(path string, h interface{}) *mux.Route {
 }
 func (r *Router) Head(path string, h interface{}) *mux.Route {
 	return r.Handle(path, h).Methods("HEAD")
+}
+
+// cleanPath returns the canonical path for p, eliminating . and .. elements.
+// Borrowed from the net/http package.
+func cleanPath(p string) string {
+	if p == "" {
+		return "/"
+	}
+	if p[0] != '/' {
+		p = "/" + p
+	}
+	np := path.Clean(p)
+	// path.Clean removes trailing slash except for root;
+	// put the trailing slash back if necessary.
+	if p[len(p)-1] == '/' && np != "/" {
+		np += "/"
+	}
+	return np
 }
