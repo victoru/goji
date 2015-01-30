@@ -1,102 +1,92 @@
 package goji
 
 import (
-	"github.com/zenazn/goji/web"
-	"github.com/zenazn/goji/web/middleware"
+	"net/http"
+
+	"github.com/gorilla/mux"
+	"github.com/victoru/goji/web"
 )
 
 // The default web.Mux.
-var DefaultMux *web.Mux
+var DefaultMux *mux.Router
 
 func init() {
-	DefaultMux = web.New()
-
-	DefaultMux.Use(middleware.RequestID)
-	DefaultMux.Use(middleware.Logger)
-	DefaultMux.Use(middleware.Recoverer)
-	DefaultMux.Use(middleware.AutomaticOptions)
+	DefaultMux = mux.NewRouter()
 }
 
-// Use appends the given middleware to the default Mux's middleware stack. See
-// the documentation for web.Mux.Use for more information.
-func Use(middleware interface{}) {
-	DefaultMux.Use(middleware)
-}
-
-// Insert the given middleware into the default Mux's middleware stack. See the
-// documentation for web.Mux.Insert for more information.
-func Insert(middleware, before interface{}) error {
-	return DefaultMux.Insert(middleware, before)
-}
-
-// Abandon removes the given middleware from the default Mux's middleware stack.
-// See the documentation for web.Mux.Abandon for more information.
-func Abandon(middleware interface{}) error {
-	return DefaultMux.Abandon(middleware)
+// Wrap wraps a given handler with a list of given middlewares
+func Wrap(hf interface{}, mfns ...interface{}) {
+	var h web.Handler
+	h = web.ParseHandler(hf)
+	for _, mfn := range mfns {
+		h = web.HandlerFunc(func(c web.C, w http.ResponseWriter, r *http.Request) {
+			web.ParseMiddleware(mfn)(c, h)
+		})
+	}
 }
 
 // Handle adds a route to the default Mux. See the documentation for web.Mux for
 // more information about what types this function accepts.
-func Handle(pattern interface{}, handler interface{}) {
-	DefaultMux.Handle(pattern, handler)
+func Handle(path string, handler interface{}) *mux.Route {
+	return DefaultMux.Handle(path, web.ParseHandler(handler))
 }
 
 // Connect adds a CONNECT route to the default Mux. See the documentation for
 // web.Mux for more information about what types this function accepts.
-func Connect(pattern interface{}, handler interface{}) {
-	DefaultMux.Connect(pattern, handler)
+func Connect(path string, handler interface{}) *mux.Route {
+	return DefaultMux.Handle(path, web.ParseHandler(handler)).Methods("CONNECT")
 }
 
 // Delete adds a DELETE route to the default Mux. See the documentation for
 // web.Mux for more information about what types this function accepts.
-func Delete(pattern interface{}, handler interface{}) {
-	DefaultMux.Delete(pattern, handler)
+func Delete(path string, handler interface{}) *mux.Route {
+	return DefaultMux.Handle(path, web.ParseHandler(handler)).Methods("DELETE")
 }
 
 // Get adds a GET route to the default Mux. See the documentation for web.Mux for
 // more information about what types this function accepts.
-func Get(pattern interface{}, handler interface{}) {
-	DefaultMux.Get(pattern, handler)
+func Get(path string, handler interface{}) *mux.Route {
+	return DefaultMux.Handle(path, web.ParseHandler(handler)).Methods("GET")
 }
 
 // Head adds a HEAD route to the default Mux. See the documentation for web.Mux
 // for more information about what types this function accepts.
-func Head(pattern interface{}, handler interface{}) {
-	DefaultMux.Head(pattern, handler)
+func Head(path string, handler interface{}) *mux.Route {
+	return DefaultMux.Handle(path, web.ParseHandler(handler)).Methods("HEAD")
 }
 
 // Options adds a OPTIONS route to the default Mux. See the documentation for
 // web.Mux for more information about what types this function accepts.
-func Options(pattern interface{}, handler interface{}) {
-	DefaultMux.Options(pattern, handler)
+func Options(path string, handler interface{}) *mux.Route {
+	return DefaultMux.Handle(path, web.ParseHandler(handler)).Methods("HEAD")
 }
 
 // Patch adds a PATCH route to the default Mux. See the documentation for web.Mux
 // for more information about what types this function accepts.
-func Patch(pattern interface{}, handler interface{}) {
-	DefaultMux.Patch(pattern, handler)
+func Patch(path string, handler interface{}) *mux.Route {
+	return DefaultMux.Handle(path, web.ParseHandler(handler)).Methods("HEAD")
 }
 
 // Post adds a POST route to the default Mux. See the documentation for web.Mux
 // for more information about what types this function accepts.
-func Post(pattern interface{}, handler interface{}) {
-	DefaultMux.Post(pattern, handler)
+func Post(path string, handler interface{}) *mux.Route {
+	return DefaultMux.Handle(path, web.ParseHandler(handler)).Methods("HEAD")
 }
 
 // Put adds a PUT route to the default Mux. See the documentation for web.Mux for
 // more information about what types this function accepts.
-func Put(pattern interface{}, handler interface{}) {
-	DefaultMux.Put(pattern, handler)
+func Put(path string, handler interface{}) *mux.Route {
+	return DefaultMux.Handle(path, web.ParseHandler(handler)).Methods("HEAD")
 }
 
 // Trace adds a TRACE route to the default Mux. See the documentation for
 // web.Mux for more information about what types this function accepts.
-func Trace(pattern interface{}, handler interface{}) {
-	DefaultMux.Trace(pattern, handler)
+func Trace(path string, handler interface{}) *mux.Route {
+	return DefaultMux.Handle(path, web.ParseHandler(handler)).Methods("HEAD")
 }
 
 // NotFound sets the NotFound handler for the default Mux. See the documentation
 // for web.Mux.NotFound for more information.
 func NotFound(handler interface{}) {
-	DefaultMux.NotFound(handler)
+	DefaultMux.NotFoundHandler = web.ParseHandler(handler)
 }

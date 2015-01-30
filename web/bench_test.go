@@ -44,7 +44,7 @@ func trivialMiddleware(h http.Handler) http.Handler {
 
 var w nilResponse
 
-func addRoutes(m *Mux, prefix string) {
+func addRoutes(m *Router, prefix string) {
 	m.Get(prefix, nilRouter{})
 	m.Post(prefix, nilRouter{})
 	m.Get(prefix+"/:id", nilRouter{})
@@ -81,8 +81,8 @@ func genRequests(prefixes []string) []*http.Request {
 func permuteRequests(reqs []*http.Request) []*http.Request {
 	out := make([]*http.Request, len(reqs))
 	perm := mrand.Perm(len(reqs))
-	for i, req := range reqs {
-		out[perm[i]] = req
+	for i := 0; i < len(reqs); i++ {
+		out[perm[i]], _ = http.NewRequest("", "", nil)
 	}
 	return out
 }
@@ -104,10 +104,12 @@ func benchN(b *testing.B, n int) {
 
 func benchM(b *testing.B, n int) {
 	m := New()
-	m.Get("/", nilRouter{})
+
+	h := nilRouter{}
 	for i := 0; i < n; i++ {
-		m.Use(trivialMiddleware)
+		Wrap(h, trivialMiddleware)
 	}
+	m.Get("/", nilRouter{})
 	r, _ := http.NewRequest("GET", "/", nil)
 
 	b.ResetTimer()

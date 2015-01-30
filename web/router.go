@@ -3,60 +3,9 @@ package web
 import (
 	"log"
 	"net/http"
-	"sort"
-	"strings"
-	"sync"
+
+	"github.com/gorilla/mux"
 )
-
-type method int
-
-const (
-	mCONNECT method = 1 << iota
-	mDELETE
-	mGET
-	mHEAD
-	mOPTIONS
-	mPATCH
-	mPOST
-	mPUT
-	mTRACE
-	// We only natively support the methods above, but we pass through other
-	// methods. This constant pretty much only exists for the sake of mALL.
-	mIDK
-
-	mALL method = mCONNECT | mDELETE | mGET | mHEAD | mOPTIONS | mPATCH |
-		mPOST | mPUT | mTRACE | mIDK
-)
-
-// The key used to communicate to the NotFound handler what methods would have
-// been allowed if they'd been provided.
-const ValidMethodsKey = "goji.web.validMethods"
-
-var validMethodsMap = map[string]method{
-	"CONNECT": mCONNECT,
-	"DELETE":  mDELETE,
-	"GET":     mGET,
-	"HEAD":    mHEAD,
-	"OPTIONS": mOPTIONS,
-	"PATCH":   mPATCH,
-	"POST":    mPOST,
-	"PUT":     mPUT,
-	"TRACE":   mTRACE,
-}
-
-type route struct {
-	prefix  string
-	method  method
-	pattern Pattern
-	handler Handler
-}
-
-type router struct {
-	lock     sync.Mutex
-	routes   []route
-	notFound Handler
-	machine  *routeMachine
-}
 
 type netHTTPWrap struct {
 	http.Handler
@@ -66,7 +15,51 @@ func (h netHTTPWrap) ServeHTTPC(c C, w http.ResponseWriter, r *http.Request) {
 	h.Handler.ServeHTTP(w, r)
 }
 
-func parseHandler(h interface{}) Handler {
+func New() *Router {
+	return &Router{mux.NewRouter()}
+}
+
+type Router struct {
+	*mux.Router
+}
+
+func (r *Router) NotFound(h interface{}) {
+	r.Router.NotFoundHandler = ParseHandler(h)
+
+}
+
+// Wrap wraps a handler with multiple middlewares
+func Wrap(hf interface{}, mf ...interface{}) Handler {
+	return wrap(hf, mf...)
+}
+
+func wrap(ih interface{}, middlewares ...interface{}) Handler {
+	var h = ParseHandler(ih)
+	return HandlerFunc(func(c C, w http.ResponseWriter, r *http.Request) {
+		// new handler instance to prevent duplicate wraps
+		var h Handler = h
+		for i := len(middlewares); i > 0; i-- {
+			mw := ParseMiddleware(middlewares[i-1])
+			h = mw(c, h)
+		}
+
+		h.ServeHTTPC(c, w, r)
+	})
+}
+
+func (r *Router) Handle(path string, h interface{}, m ...interface{}) *mux.Route {
+	return r.Router.Handle(path, wrap(h, m...))
+}
+
+func (r *Router) HandleFunc(
+	path string,
+	f func(C, http.ResponseWriter, *http.Request),
+	middlewares ...interface{},
+) *mux.Route {
+	return r.Router.Handle(path, wrap(f, middlewares...))
+}
+
+func ParseHandler(h interface{}) Handler {
 	switch f := h.(type) {
 	case Handler:
 		return f
@@ -85,89 +78,55 @@ func parseHandler(h interface{}) Handler {
 	panic("log.Fatalf does not return")
 }
 
-func httpMethod(mname string) method {
-	if method, ok := validMethodsMap[mname]; ok {
-		return method
+func ParseMiddlewares(m ...interface{}) []func(C, Handler) Handler {
+	var middlewares []func(C, Handler) Handler
+	for _, m := range m {
+		middlewares = append(middlewares, ParseMiddleware(m))
 	}
-	return mIDK
+	return middlewares
 }
 
-func (rt *router) compile() *routeMachine {
-	rt.lock.Lock()
-	defer rt.lock.Unlock()
-	sm := routeMachine{
-		sm:     compile(rt.routes),
-		routes: rt.routes,
-	}
-	rt.setMachine(&sm)
-	return &sm
-}
-
-func (rt *router) route(c *C, w http.ResponseWriter, r *http.Request) {
-	rm := rt.getMachine()
-	if rm == nil {
-		rm = rt.compile()
-	}
-
-	methods, route := rm.route(c, w, r)
-	if route != nil {
-		route.handler.ServeHTTPC(*c, w, r)
-		return
-	}
-
-	if methods == 0 {
-		rt.notFound.ServeHTTPC(*c, w, r)
-		return
-	}
-
-	var methodsList = make([]string, 0)
-	for mname, meth := range validMethodsMap {
-		if methods&meth != 0 {
-			methodsList = append(methodsList, mname)
+func ParseMiddleware(m interface{}) func(C, Handler) Handler {
+	switch f := m.(type) {
+	case func(Handler) Handler:
+		return func(c C, h Handler) Handler {
+			return f(h)
 		}
+	case func(C, Handler) Handler:
+		return f
+	default:
+		log.Fatalf(`Unknown middleware type %#v. Expected a function `+
+			`with signature "func(web.Handler) web.Handler" or `+
+			`"func(*web.C, web.Handler) web.Handler".`, m)
 	}
-	sort.Strings(methodsList)
-
-	if c.Env == nil {
-		c.Env = map[string]interface{}{
-			ValidMethodsKey: methodsList,
-		}
-	} else {
-		c.Env[ValidMethodsKey] = methodsList
-	}
-	rt.notFound.ServeHTTPC(*c, w, r)
+	panic("log.Fatalf does not return")
 }
 
-func (rt *router) handleUntyped(p interface{}, m method, h interface{}) {
-	rt.handle(ParsePattern(p), m, parseHandler(h))
+// helper methods
+func (r *Router) Get(path string, h interface{}) *mux.Route {
+	return r.Handle(path, h).Methods("GET")
 }
-
-func (rt *router) handle(p Pattern, m method, h Handler) {
-	rt.lock.Lock()
-	defer rt.lock.Unlock()
-
-	// Calculate the sorted insertion point, because there's no reason to do
-	// swapping hijinks if we're already making a copy. We need to use
-	// bubble sort because we can only compare adjacent elements.
-	pp := p.Prefix()
-	var i int
-	for i = len(rt.routes); i > 0; i-- {
-		rip := rt.routes[i-1].prefix
-		if rip <= pp || strings.HasPrefix(rip, pp) {
-			break
-		}
-	}
-
-	newRoutes := make([]route, len(rt.routes)+1)
-	copy(newRoutes, rt.routes[:i])
-	newRoutes[i] = route{
-		prefix:  pp,
-		method:  m,
-		pattern: p,
-		handler: h,
-	}
-	copy(newRoutes[i+1:], rt.routes[i:])
-
-	rt.setMachine(nil)
-	rt.routes = newRoutes
+func (r *Router) Post(path string, h interface{}) *mux.Route {
+	return r.Handle(path, h).Methods("POST")
+}
+func (r *Router) Patch(path string, h interface{}) *mux.Route {
+	return r.Handle(path, h).Methods("PATCH")
+}
+func (r *Router) Put(path string, h interface{}) *mux.Route {
+	return r.Handle(path, h).Methods("PUT")
+}
+func (r *Router) Delete(path string, h interface{}) *mux.Route {
+	return r.Handle(path, h).Methods("DELETE")
+}
+func (r *Router) Trace(path string, h interface{}) *mux.Route {
+	return r.Handle(path, h).Methods("TRACE")
+}
+func (r *Router) Connect(path string, h interface{}) *mux.Route {
+	return r.Handle(path, h).Methods("CONNECT")
+}
+func (r *Router) Options(path string, h interface{}) *mux.Route {
+	return r.Handle(path, h).Methods("Options")
+}
+func (r *Router) Head(path string, h interface{}) *mux.Route {
+	return r.Handle(path, h).Methods("HEAD")
 }
